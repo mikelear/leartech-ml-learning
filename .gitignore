@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# C++ build
+sessions/*/build/
+sessions/06b-libtorch-debug/libtorch/
+
+# IDE
+.idea/
+
+# OS
+.DS_Store
+
+# Model files (large — tracked separately if needed)
+# models/*.pt
+
+# Jupyter
+.ipynb_checkpoints/
