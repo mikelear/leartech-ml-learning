@@ -6,7 +6,7 @@
 PYTHON := python3
 PIP := pip3
 VENV_DIR := .venv
-CLUSTER_CONTEXT := modern-burro-admin
+CLUSTER_CONTEXT := modern-burro
 
 # Minimum versions
 MIN_PYTHON_MAJOR := 3
@@ -25,12 +25,13 @@ help:
 	@echo "  ML Learning Journey"
 	@echo "  ==================="
 	@echo ""
-	@echo "  Setup:"
+	@echo "  Setup (see SETUP.md for full guide):"
 	@echo "    check            Run all pre-session checks"
 	@echo "    check-python     Check Python and pip"
 	@echo "    check-cpp        Check C++ toolchain (clang, cmake)"
 	@echo "    check-ide        Check PyCharm and CLion"
 	@echo "    check-gpu        Check Azure GPU node and Ollama"
+	@echo "    check-ollama     Check local Ollama server and models"
 	@echo "    check-venv       Check virtual environment and packages"
 	@echo ""
 	@echo "    setup-venv       Create Python virtual environment"
@@ -39,8 +40,15 @@ help:
 	@echo ""
 	@echo "  Sessions:"
 	@echo "    list-sessions    Show all sessions and progress"
+	@echo "    run SESSION=10.5 Run a session from the command line"
+	@echo ""
+	@echo "  Local AI Review Testing:"
+	@echo "    review-local     Run AI review test suite (Ollama + APIs)"
+	@echo "    review-ollama    Run AI review test suite (Ollama only, no API cost)"
+	@echo "    review-api       Run AI review test suite (Claude + DeepSeek only)"
 	@echo ""
 	@echo "  Run 'make check' before your first session."
+	@echo "  See SETUP.md for PyCharm interpreter setup and troubleshooting."
 	@echo ""
 
 # ===========================
@@ -251,30 +259,148 @@ setup-cpp:
 
 list-sessions:
 	@echo ""
-	@echo "  Session Plan"
-	@echo "  ============"
+	@echo "  ML Learning — Sessions                         Model affected"
+	@echo "  ═══════════════════════════════════════════════════════════════"
 	@echo ""
-	@echo "  Track 1: Python (PyCharm)"
-	@echo "  ─────────────────────────"
-	@echo "  01. What is a tensor?"
-	@echo "  02. Feature extraction — diffs to numbers"
-	@echo "  03. A single neuron"
-	@echo "  04. A neural network — stacking layers"
-	@echo "  05. Forward pass"
-	@echo "  06. Loss function"
-	@echo "  07. Backpropagation"
-	@echo "  08. Training loop"
-	@echo "  09. Overfitting"
-	@echo "  10. Our classifier — PASS/FAIL on real diffs"
-	@echo "  11. Deploy it — Flask API + K8s"
-	@echo "  12. LoRA concepts — what fine-tuning changes"
+	@echo "  Fundamentals (PyCharm)"
+	@echo "  ✅ 01. What is a tensor?                        Concepts only"
+	@echo "  ✅ 02. Feature extraction — diffs to numbers    Concepts only"
+	@echo "  ✅ 03. A single neuron                          Concepts only"
+	@echo "  ✅ 04. A neural network — stacking layers       Concepts only"
+	@echo "  ✅ 05. Forward pass                             Concepts only"
+	@echo "  ✅ 06. Loss function                            Concepts only"
+	@echo "  ✅ 6b. libtorch debug (CLion)                   Concepts only"
+	@echo "  ✅ 07. Backpropagation                          Concepts only"
+	@echo "  ✅ 08. Training loop                            Concepts only"
+	@echo "  ✅ 09. Overfitting                              Concepts only"
 	@echo ""
-	@echo "  Track 2: C++ (CLion)"
-	@echo "  ─────────────────────"
-	@echo "  03c. Matrix multiply under the hood"
-	@echo "  05c. Step through a forward pass"
-	@echo "  07c. Backprop — see the chain rule"
-	@echo "  08c. SGD weight update in raw memory"
+	@echo "  Real classifier + debug loop (PyCharm)"
+	@echo "  ✅ 10.  Our classifier on real data             Our Classifier"
+	@echo "  ✅ 10.5 Better features (TF-IDF + stacking)    Our Classifier"
+	@echo "  ✅ 10.6 Eval harness (gate FAIL)               Our Classifier"
+	@echo "  ✅ 10.7 Fix distribution mismatch (gate FAIL)  Our Classifier"
+	@echo "  ✅ 10.8 Iterate to green (gate PASS)           Our Classifier"
+	@echo ""
+	@echo "  Deploy + pipeline integration"
+	@echo "  ✅ 11.  Deploy to K8s (recap)                   Our Classifier"
+	@echo "  ✅ 11.5 Pipeline signals as features            Our Classifier"
+	@echo "  🔄 11.6 Deploy v5 to production                Our Classifier"
+	@echo ""
+	@echo "  LoRA fine-tuning"
+	@echo "  ✅ 12.  LoRA concepts (toy data, learning)     GPT-2 (local)"
+	@echo "  ⏳ 12b. LoRA on real corpus (production)       Ollama/Qwen"
+	@echo ""
+	@echo "  Run: make run SESSION=10.5"
+	@echo "  Debug: open in PyCharm, set breakpoints at 🔴 lines, Debug"
+	@echo "  Setup: see SETUP.md"
 	@echo ""
 
-.PHONY: help check check-python check-cpp check-ide check-gpu check-venv setup-venv install-deps setup-cpp list-sessions _header _footer
+# ===========================
+# Local Ollama checks
+# ===========================
+
+OLLAMA_LOCAL_ENDPOINT := http://localhost:11434
+OLLAMA_LOCAL_MODEL := qwen2.5-coder:7b
+REVIEW_WORKER_DIR := ../leartech-ai-review-worker
+
+check-ollama:
+	@echo "--- Local Ollama ---"
+	@if curl -s --max-time 3 "$(OLLAMA_LOCAL_ENDPOINT)/api/tags" >/dev/null 2>&1; then \
+		echo "  $(GREEN)✓$(NC) Ollama server running at $(OLLAMA_LOCAL_ENDPOINT)"; \
+		MODELS=$$(curl -s "$(OLLAMA_LOCAL_ENDPOINT)/api/tags" | python3 -c "import json,sys; [print('    ' + m['name']) for m in json.load(sys.stdin).get('models',[])]" 2>/dev/null); \
+		if [ -n "$$MODELS" ]; then \
+			echo "  $(GREEN)✓$(NC) Models available:"; \
+			echo "$$MODELS"; \
+		else \
+			echo "  $(YELLOW)⚠$(NC) No models loaded — run: ollama pull $(OLLAMA_LOCAL_MODEL)"; \
+		fi; \
+		if curl -s "$(OLLAMA_LOCAL_ENDPOINT)/api/tags" | grep -q "$(OLLAMA_LOCAL_MODEL)"; then \
+			echo "  $(GREEN)✓$(NC) $(OLLAMA_LOCAL_MODEL) ready (local testing model)"; \
+		else \
+			echo "  $(YELLOW)⚠$(NC) $(OLLAMA_LOCAL_MODEL) not found — run: ollama pull $(OLLAMA_LOCAL_MODEL)"; \
+		fi; \
+	else \
+		echo "  $(RED)✗$(NC) Ollama not running locally"; \
+		echo "    Install: brew install ollama"; \
+		echo "    Start:   ollama serve"; \
+		echo "    Model:   ollama pull $(OLLAMA_LOCAL_MODEL)"; \
+	fi
+	@echo ""
+
+# ===========================
+# Local AI Review Testing
+# ===========================
+
+review-local:
+	@if [ ! -d "$(REVIEW_WORKER_DIR)" ]; then \
+		echo "$(RED)✗$(NC) Review worker not found at $(REVIEW_WORKER_DIR)"; \
+		echo "  Clone: git clone https://github.com/mikelear/leartech-ai-review-worker.git $(REVIEW_WORKER_DIR)"; \
+		exit 1; \
+	fi
+	@echo "Running AI review test suite (Ollama + Claude + DeepSeek)..."
+	@echo "  Ollama: $(OLLAMA_LOCAL_ENDPOINT) ($(OLLAMA_LOCAL_MODEL))"
+	@echo "  APIs: Claude + DeepSeek (keys from GCP Secret Manager)"
+	@echo ""
+	cd $(REVIEW_WORKER_DIR) && ./run-local.sh
+
+review-ollama:
+	@if [ ! -d "$(REVIEW_WORKER_DIR)" ]; then \
+		echo "$(RED)✗$(NC) Review worker not found at $(REVIEW_WORKER_DIR)"; \
+		exit 1; \
+	fi
+	@echo "Running AI review test suite (Ollama only — no API cost)..."
+	cd $(REVIEW_WORKER_DIR) && ./run-local.sh --ollama-only
+
+review-api:
+	@if [ ! -d "$(REVIEW_WORKER_DIR)" ]; then \
+		echo "$(RED)✗$(NC) Review worker not found at $(REVIEW_WORKER_DIR)"; \
+		exit 1; \
+	fi
+	@echo "Running AI review test suite (Claude + DeepSeek only — no local Ollama needed)..."
+	cd $(REVIEW_WORKER_DIR) && ./run-local.sh --no-ollama
+
+# ===========================
+# Run a session from CLI
+# ===========================
+
+# Usage: make run SESSION=10.5
+# Maps SESSION number to the session directory and script
+
+SESSION_MAP_01 := sessions/01-tensors/tensors.py
+SESSION_MAP_02 := sessions/02-features/features.py
+SESSION_MAP_03 := sessions/03-single-neuron/single_neuron.py
+SESSION_MAP_04 := sessions/04-neural-network/neural_network.py
+SESSION_MAP_05 := sessions/05-forward-pass/forward_pass.py
+SESSION_MAP_06 := sessions/06-loss-function/loss_function.py
+SESSION_MAP_07 := sessions/07-backpropagation/backpropagation.py
+SESSION_MAP_08 := sessions/08-training-loop/training_loop.py
+SESSION_MAP_09 := sessions/09-overfitting/overfitting.py
+SESSION_MAP_10 := sessions/10-our-classifier/classifier.py
+SESSION_MAP_10.5 := sessions/10.5-better-features/better_features.py
+SESSION_MAP_10.6 := sessions/10.6-eval-harness/eval_harness.py
+SESSION_MAP_10.7 := sessions/10.7-fix-distribution/fix_distribution.py
+SESSION_MAP_10.8 := sessions/10.8-iterate-to-green/iterate_to_green.py
+SESSION_MAP_11.5 := sessions/11.5-pipeline-signals/pipeline_signals.py
+SESSION_MAP_12 := sessions/12-lora-concepts/lora_concepts.py
+
+run:
+	@if [ -z "$(SESSION)" ]; then \
+		echo "Usage: make run SESSION=10.5"; \
+		echo "Available: 01-10, 10.5-10.8, 11.5"; \
+		exit 1; \
+	fi
+	@SCRIPT="$(SESSION_MAP_$(SESSION))"; \
+	if [ -z "$$SCRIPT" ]; then \
+		echo "Unknown session: $(SESSION)"; \
+		echo "Available: 01-10, 10.5-10.8, 11.5"; \
+		exit 1; \
+	fi; \
+	if [ ! -f "$$SCRIPT" ]; then \
+		echo "Script not found: $$SCRIPT"; \
+		exit 1; \
+	fi; \
+	echo "Running Session $(SESSION): $$SCRIPT"; \
+	echo ""; \
+	$(VENV_DIR)/bin/python "$$SCRIPT"
+
+.PHONY: help check check-python check-cpp check-ide check-gpu check-ollama check-venv setup-venv install-deps setup-cpp list-sessions run review-local review-ollama review-api _header _footer

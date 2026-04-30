@@ -1,0 +1,58 @@
+[
+  {
+    "file": "test_cases/fail/hardcoded-secrets.diff",
+    "expected_verdict": "FAIL",
+    "actual_verdict": "FAIL",
+    "probability": 0.9999,
+    "match": true,
+    "status": "pass"
+  },
+  {
+    "file": "test_cases/fail/eval-injection.diff",
+    "expected_verdict": "FAIL",
+    "actual_verdict": "FAIL",
+    "probability": 0.9997,
+    "match": true,
+    "status": "pass"
+  },
+  {
+    "file": "test_cases/fail/no-type-hints-python.diff",
+    "expected_verdict": "FAIL",
+    "actual_verdict": "FAIL",
+    "probability": 0.9418,
+    "match": true,
+    "status": "pass"
+  },
+  {
+    "file": "test_cases/pass/proper-angular-service.diff",
+    "expected_verdict": "PASS",
+    "actual_verdict": "PASS",
+    "probability": 0.0,
+    "match": true,
+    "status": "pass"
+  },
+  {
+    "file": "test_cases/pass/typed-python-fastapi.diff",
+    "expected_verdict": "PASS",
+    "actual_verdict": "PASS",
+    "probability": 0.0001,
+    "match": true,
+    "status": "pass"
+  },
+  {
+    "file": "test_cases/pass/go-error-handling.diff",
+    "expected_verdict": "PASS",
+    "actual_verdict": "PASS",
+    "probability": 0.0272,
+    "match": true,
+    "status": "pass"
+  },
+  {
+    "file": "test_cases/edge/test-file-only.diff",
+    "expected_verdict": "PASS",
+    "actual_verdict": "PASS",
+    "probability": 0.0788,
+    "match": true,
+    "status": "pass"
+  }
+]

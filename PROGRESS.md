@@ -296,20 +296,300 @@ Session 8:  gradients → weight updates (optimizer) ← next
 
 ---
 
+## Session 10.5: Better Features — TF-IDF + Feature Stacking ✅
+
+**Concept:** The Session 10 classifier uses 16 hand-crafted regex features and sits at 43% accuracy on the eval suite. Most features have near-zero variance (eval_calls, innerHTML are almost always 0). TF-IDF automatically finds distinctive tokens without hand-crafting.
+
+**What you learned:**
+- **TF-IDF** automatically discovered that `err`, `nil`, `if err` (Go) correlate with PASS; `component`, `src`, `px` (Angular/CSS) correlate with FAIL
+- **Feature stacking** combines hand-crafted `[16]` + TF-IDF `[100]` = `[116]` — best of both
+- **StandardScaler** is mandatory when combining features of different scales (counts vs TF-IDF weights)
+- **Probability spread** matters as much as accuracy — the stacked model had 0/22 uncertain predictions
+
+**Results:**
+
+| Model | Accuracy | F1 | Prob Spread | Uncertain |
+|---|---|---|---|---|
+| Hand-crafted (16) | 68.2% | 58.8% | 0.372 | 2/22 |
+| TF-IDF (100) | 77.3% | 76.2% | 0.377 | 3/22 |
+| **Stacked (116)** | **81.8%** | **80.0%** | **0.470** | **0/22** |
+
+**Key debugger moments:**
+- Line 116: most hand-crafted features have near-zero std — dead features
+- Line 176: TF-IDF tokens — the model found patterns YOU didn't think of
+- Line 311: three models compared — stacked wins on every metric
+
+**Files:** `sessions/10.5-better-features/better_features.py`
+
+---
+
+## Session 10.6: Eval Harness — Unit Testing for Models ✅
+
+**Concept:** Just like code has tests that gate deployment, models need an eval harness. Uses the REAL 7 test cases from `leartech-llm-training-data/evals/` and compares Session 10.5 model against baseline.
+
+**What you learned:**
+- The eval harness IS unit tests for models — fixed inputs, expected outputs, regression detection
+- Session 10.5 model (81.8% training accuracy) got only **57% eval accuracy** — all PASS cases correct but all 3 FAIL cases regressed
+- The model predicts everything as PASS (prob ~0.001) because TF-IDF vocabulary from training doesn't overlap with short eval diffs
+- **Gate correctly blocked deployment**: accuracy 57% < 80% floor, 3 regressions
+
+**The analogy:**
+
+| Unit testing | Model eval |
+|---|---|
+| `assert status == 200` | `assert verdict == "FAIL"` |
+| coverage >= 80% | accuracy >= 80% |
+| no test failures | no regressions |
+| CI blocks merge | pipeline blocks deploy |
+
+**Key debugger moments:**
+- Line 89: baseline — all probabilities 0.52–0.62 (guessing)
+- Line 164: sanity check — clean Go: 0.135, secrets+eval: 1.000 (confidence works!)
+- Line 203: eval results — all FAIL cases now wrong (distribution mismatch)
+- Line 310: gate FAIL — 57% accuracy, 3 regressions
+
+**Files:** `sessions/10.6-eval-harness/eval_harness.py`
+
+---
+
+## Session 10.7: Fix Distribution Mismatch ✅
+
+**Concept:** The 10.6 gate blocked. Diagnose WHY, then fix iteratively — the real ML debug loop.
+
+**Root cause:** Distribution mismatch. Training diffs are ~5,000 chars (real PRs). Eval diffs are ~300–600 chars (synthetic). TF-IDF vocabulary learned from real PRs barely overlaps with eval tokens. The model sees "nothing suspicious" → PASS.
+
+**Three fixes applied:**
+1. **Char n-grams** — character sequences ("eva","al(") match even in unseen text. Eval diffs went from 13/100 active tokens to 55/200.
+2. **Boosted hand-crafted** — multiply by 3× so security signals aren't drowned by 200 TF-IDF zeros
+3. **Data augmentation** — add eval-like + variant diffs to training set
+
+**Results:** 43% → 71% (5/7), but 1 regression remained (`no-type-hints-python.diff`). Gate blocked.
+
+**Key learning:** The two remaining failures are both Python — the model can't tell "Python with eval" (bad) from "Python with pydantic" (good). Needs language-aware features.
+
+**Key debugger moments:**
+- Line 146: token overlap diagnosis — eval diffs activate 13/100 words vs 73/100 for training
+- Line 194: char n-grams fix overlap — 55/200 active (4× improvement)
+- Line 397: three fixes compared — each helps but none alone is enough
+
+**Files:** `sessions/10.7-fix-distribution/fix_distribution.py`
+
+---
+
+## Session 10.8: Iterate to Green ✅
+
+**Concept:** The final iteration. Targeted danger/quality features + Python-focused augmentation → gate PASS.
+
+**What you added:**
+- **12 new features** (28 total): 6 danger signals (exec, pickle, untyped defs, hardcoded assignments, env access, base64) + 6 quality signals (type annotations, return types, structured types, test assertions, explicit errors, async typed)
+- **Python-specific augmentation:** 3 FAIL variants (eval, pickle, os.system) + 3 PASS variants (pydantic, dataclass, typed async)
+- Features now encode what a **reviewer** looks for, not just generic code patterns
+
+**Results — the full journey:**
+
+| Session | Eval Accuracy | Prob Spread | Gate |
+|---|---|---|---|
+| 10 (baseline) | 43% (3/7) | 0.036 | — |
+| 10.5+10.6 | 57% (4/7) | 0.003 | FAIL |
+| 10.7 | 71% (5/7) | varies | FAIL |
+| **10.8** | **100% (7/7)** | **0.431** | **PASS ✅** |
+
+**Per-case probabilities (baseline → final):**
+
+| Case | Baseline | Final | Verdict |
+|---|---|---|---|
+| hardcoded-secrets | 0.619 | **0.995** | FAIL ✓ |
+| eval-injection | 0.610 | **0.993** | FAIL ✓ |
+| no-type-hints | 0.533 | **0.824** | FAIL ✓ |
+| angular-service | 0.527 | **0.000** | PASS ✓ |
+| typed-fastapi | 0.533 | **0.002** | PASS ✓ |
+| go-error-handling | 0.533 | **0.093** | PASS ✓ |
+| test-file-only | 0.570 | **0.257** | PASS ✓ |
+
+**Key insight:** Features should encode your STANDARDS. "Does this diff have eval()?" and "Does this diff have type hints?" are features that directly mirror what a reviewer checks. Your domain knowledge → targeted features → model learns your standards.
+
+**Key debugger moments:**
+- Line 173: bad_feats vs good_feats — v3 features clearly separate the Python cases
+- Line 389: eval results — every case correct, probabilities spread far from 0.5
+- Line 428: gate PASS — the payoff moment
+
+**Files:** `sessions/10.8-iterate-to-green/iterate_to_green.py`
+
+---
+
+## Session 11: Deploy to K8s — Recap ✅
+
+**Concept:** Everything from Sessions 1–10 packaged into a production-ready service, deployed to both clusters via JX3 GitOps.
+
+**Status:** DONE (deployed 2026-04-08). The `leartech-ai-classifier` service is live in `jx-staging` on GCP at `v0.3.0`. All 6 PR pipeline checks pass.
+
+**What was built:**
+- **Repo:** `leartech-ai-classifier/` — FastAPI app serving predictions on `:8080`
+- **Architecture:** 3-layer MLP (16 → 32 → 16 → 1, ~1,100 params), loads `models/code_classifier.pt` at startup
+- **API:** `GET /health` (model status), `POST /predict` (diff → PASS/FAIL + confidence + features), `GET /model/info` (metadata)
+- **Docker image:** `ghcr.io/mikelear/ai-classifier` or `us-central1-docker.pkg.dev/product-first/oci/leartech-ai-classifier`
+- **Helm chart:** `charts/leartech-ai-classifier/` — standard JX3 chart with ingress template
+- **Tooling:** UV (deps), Ruff (lint/fmt), mypy strict, pytest with 80% coverage gate
+
+**Pipeline checks (all passing):**
+
+| Context | Check |
+|---|---|
+| `pr` | Build + test + preview |
+| `lint` | Ruff format + lint + mypy strict |
+| `ai-review` | AI code review (3 LLMs) |
+| `security-scan` | Gitleaks + Semgrep |
+| `image-scan` | Grype dependency scan |
+| `dynamic-scan` | Nuclei + Nikto + Nmap on preview |
+
+**Key decisions:**
+- **Python, not Go** — PyTorch is the ML ecosystem; Go would have been systems engineering, not ML learning
+- **FastAPI over Flask** — auto-generated OpenAPI docs, async-ready, modern
+- **Model baked into image** — `models/code_classifier.pt` committed to repo, no GCS fetch at startup (simple; will change when training CronJob exists)
+- **CPU-only inference** — 1,100 params runs in ~10ms on CPU, no GPU allocation needed
+- **No Ollama dependency** — fully independent model, not a LoRA adapter on someone else's weights
+
+**Cluster state (as of 2026-04-30):**
+- GCP: `leartech-ai-classifier:0.3.0` running in `jx-staging`, 1/1 replicas
+- Az: auth expired at time of check — needs re-auth to verify
+
+**What's NOT done yet:**
+- Classifier is NOT wired into the AI review pipeline (not called from `pullrequest.yaml`)
+- No training CronJob — model is static at the 102-record version
+- Eval accuracy is 43% (Sessions 10.5/10.6 address this)
+
+**Files:** `leartech-ai-classifier/` repo (code), `leartech-dockerfiles/` (if separate image build), `jx-build-cluster-gsm/` (GitOps promotion)
+
+---
+
+## Session 11.5: Pipeline Signals as Features ✅
+
+**Type:** Both learning + production. Uses mock data initially, real data when infra exists.
+**Model affected:** Our Classifier (adds new features to `extract_features()`)
+
+**Concept:** The classifier sees only diff text. Pipeline signals (risk-assessor, Tempo, e2e, semgrep) tell you what that change MEANS in the system. A clean-looking diff that affects 5 critical services with an e2e failure is a fundamentally different risk profile.
+
+**What you learned:**
+- **Multi-modal input:** combining text features (from diff) with structured features (from pipeline). Same diff, different pipeline signals → prediction flips from PASS (prob=0.040) to FAIL (prob=0.852)
+- **Feature importance:** 4 of the top 5 most correlated features were pipeline signals (`leartech_violations`, `e2e_passed`, `unexpected_edges`, `services_affected`) — even with mock data
+- **Optional features with defaults:** deploy with `pipeline_signals=None` (neutral defaults), features activate automatically when real infra exists. No code change needed when risk-assessor ships.
+
+**6 new pipeline features:** `services_affected`, `touches_critical`, `unexpected_edges`, `coverage_gaps`, `e2e_passed`, `leartech_violations`
+
+**Key debugger moment:** Breakpoint 5 — same diff produces PASS (prob=0.040) with safe signals and FAIL (prob=0.852) with risky signals. The diff alone can't tell you this.
+
+**Files:** `sessions/11.5-pipeline-signals/pipeline_signals.py`
+
+---
+
+## Session 11.6: Deploy v5 Classifier to Production (In Progress)
+
+**Type:** Production deployment — real changes to leartech-ai-classifier service.
+**Model affected:** Our Classifier (v1 → v5 in jx-staging on both clusters)
+
+**Concept:** Deploy the model artefacts from Sessions 10.8 + 11.5 through the leartech JX3 GitOps pipeline. This is a real deployment — understanding the flow (PR → 6 checks → merge → release → GitOps auto-PR → boot job → new pod) is as important as the code.
+
+**What changed:**
+- `features.py`: `extract_features_v3()` (28 features) + `extract_all_features()` (234 with TF-IDF + pipeline signals)
+- `model.py`: dynamic `input_dim`, loads TF-IDF vectorizer + scaler, handles v1/v5 key formats
+- `main.py`: `PredictRequest` accepts optional `PipelineSignals`
+- `models/`: v5 weights (72KB) + `tfidf_char.pkl` + `scaler.pkl`
+- `pyproject.toml`: added `numpy`, `scikit-learn`
+- Tests: 36 passing, lint clean, mypy strict
+
+**PR:** https://github.com/mikelear/leartech-ai-classifier/pull/5
+
+**Discovery during deployment:** Ollama/Qwen scores 0 on this repo's PRs because `features.py` contains regex patterns (`r'eval\s*\('`, `r'innerHTML'`) that Qwen thinks are real security issues. They're detection rules, not vulnerabilities.
+
+**Feedback loop test:** Posted `/ai-feedback approve` with context about regex patterns. Feedback captured in ChromaDB (count 323). RAG retrieved it on re-run. **Qwen still scored 0** — confirms this pattern needs Level 3 (LoRA) not Level 1/2 (prompt/RAG). Prime training data for Session 12b.
+
+**Outlier fix:** `aggregate.py` now treats score=0 with parse=ok as an outlier — excluded from score average and critical-issue gate. Ollama's 0 no longer drags the aggregate from 78 to 52 or triggers FAIL.
+
+**Files:** `sessions/11.6-deploy-v5/README.md` (deployment guide + JX3 flow explanation)
+
+---
+
+## Session 12: LoRA Concepts ✅
+
+**Type:** Learning only — toy model on local CPU, not deployed.
+**Model affected:** GPT-2 124M (OpenAI's base weights + our small adapter). NOT Ollama/Qwen in production.
+
+**Concept:** LoRA takes someone else's model and trains a small adapter (~0.5% of weights) on our data. The base weights are FROZEN. Only the adapter matrices are trained. Like an MCP server: Claude (unchanged) + your tools (runtime). LoRA: GPT-2 (frozen) + your adapter (trained).
+
+**This does NOT create "our model"** — it creates **our adapter on their model**.
+
+**What you learned:**
+- **LoRA mechanics:** adds small A×B matrices alongside frozen weight matrices. `output = W×input + B×A×input` (W frozen, A+B trainable)
+- **Rank controls capacity:** rank=1 → 101K params (0.08%), rank=8 → 811K (0.65%), rank=64 → 6.5M (4.96%)
+- **Base weights don't change:** verified by comparing weight tensors before/after training — base weights identical, adapter weights changed
+- **Merge and deploy:** adapter merges into base model → one model → export as GGUF → Ollama serves it. The adapter is permanent (like merging a PR)
+- **vs MCP:** MCP is runtime/removable, LoRA is baked in/permanent
+
+**Key debugger moments:**
+- Breakpoint 3: `lora_model.base_model.model.transformer.h[0].attn.c_attn` now has `.lora_A` and `.lora_B` alongside `.weight`
+- Breakpoint 5: `base_changed = False`, `adapter_changed = True` — the proof that LoRA only modifies adapter weights
+- Breakpoint 8: rank comparison — same model, 100× difference in trainable params
+
+**Used GPT-2 (124M) instead of Qwen (14B)** — same mechanics at 100× smaller scale, runs on CPU in PyCharm. Session 12b applies these mechanics to Qwen at full scale on GPU.
+
+**Files:** `sessions/12-lora-concepts/lora_concepts.py`, `sessions/12-lora-concepts/README.md`
+
+---
+
+## Session 12b: LoRA on Real Corpus (Future)
+
+**Type:** Production — produces a new model served by Ollama.
+**Model affected:** Ollama/Qwen → becomes `qwen2.5-coder-14b-leartech`
+
+**Concept:** Apply Session 12 mechanics to the real leartech feedback corpus. The output is a merged GGUF file uploaded to Ollama. After this, Ollama serves `qwen2.5-coder-14b-leartech` — Qwen's 14B foundation + our leartech-specific adapter.
+
+**What changes in production:**
+- Ollama serves a new model name: `qwen2.5-coder-14b-leartech`
+- The base weights are still Alibaba's Qwen (we didn't create them)
+- The adapter weights (~1% of total) are trained on our `[leartech]`-tagged feedback
+- The model knows leartech conventions that base Qwen doesn't (hardcoded URLs, chart forks, etc.)
+
+**What does NOT change:**
+- Claude and DeepSeek — still API calls, still their weights, improved only via prompt injection
+- Our Classifier — still our separate model, still uses its own features
+
+**Prerequisites:**
+- ≥200 `[leartech]`-tagged feedback records (from context-injection Layer 1 + Layer 2)
+- Risk-assessor result store data with labelled outcomes (from Phase 2.5)
+- Session 10.8 classifier at ≥80% accuracy (done ✅)
+- GPU access (L4 on GCP or T4 on Azure)
+
+**What you'll learn:**
+- **Data curation:** which feedback records make good training examples vs noise
+- **Preference pairs for DPO:** "human preferred this review over that review" — Phase 3 mechanics
+- **A/B evaluation:** does the fine-tuned Qwen agree with human feedback more than base Qwen?
+- **Deployment:** push merged GGUF to Ollama, update pipeline to reference new model name
+
+**Files:** `sessions/12b-lora-production/` (to be created)
+
+---
+
 ## Session Summary
 
-| Session | Topic | Track | Status |
-|---------|-------|-------|--------|
-| 1 | Tensors | Python | ✅ |
-| 2 | Feature Extraction | Python | ✅ |
-| 3 | Single Neuron | Python | ✅ |
-| 4 | Neural Network | Python | ✅ |
-| 5 | Forward Pass | Python | ✅ |
-| 6 | Loss Function | Python + C++ (manual) | ✅ |
-| 6b | libtorch Debug | C++ (real library) | ✅ |
-| 7 | Backpropagation | Python | ✅ |
-| 8 | Training Loop | Python | ✅ |
-| 9 | Overfitting | Python | ✅ |
-| 10 | Our Classifier (real data) | Python | ✅ |
-| 11 | Deploy to K8s | Python + Cluster | Pending |
-| 12 | LoRA Concepts | Python | Pending |
+| Session | Topic | Model affected | Track | Status |
+|---------|-------|---------------|-------|--------|
+| 1 | Tensors | Concepts only | Python | ✅ |
+| 2 | Feature Extraction | Concepts only | Python | ✅ |
+| 3 | Single Neuron | Concepts only | Python | ✅ |
+| 4 | Neural Network | Concepts only | Python | ✅ |
+| 5 | Forward Pass | Concepts only | Python | ✅ |
+| 6 | Loss Function | Concepts only | Python + C++ (manual) | ✅ |
+| 6b | libtorch Debug | Concepts only | C++ (real library) | ✅ |
+| 7 | Backpropagation | Concepts only | Python | ✅ |
+| 8 | Training Loop | Concepts only | Python | ✅ |
+| 9 | Overfitting | Concepts only | Python | ✅ |
+| 10 | Our Classifier (real data) | Our Classifier | Python | ✅ |
+| 10.5 | Better Features (TF-IDF + stacking) | Our Classifier | Python | ✅ |
+| 10.6 | Eval Harness (unit testing for models) | Our Classifier (gating) | Python | ✅ |
+| 10.7 | Fix Distribution Mismatch | Our Classifier | Python | ✅ |
+| 10.8 | Iterate to Green (gate pass) | Our Classifier | Python | ✅ |
+| 11 | Deploy to K8s (recap) | Our Classifier | Python + Cluster | ✅ |
+| 11.5 | Pipeline Signals as Features | Our Classifier | Python | ✅ |
+| 11.6 | Deploy v5 to Production | Our Classifier | Cluster + PR | In Progress |
+| 12 | LoRA Concepts (toy data) | GPT-2 (learning) | Python (CPU) | ✅ |
+| 12b | LoRA on Real Corpus | Ollama/Qwen (production) | Python + GPU + Cluster | Future |
